@@ -1,18 +1,17 @@
-# Imagen base oficial con RDKit y Python
-FROM rdkit/rdkit:2022.09.5-py3.9
+FROM continuumio/miniconda3
 
-# Establece el directorio de trabajo
+# Crear y activar entorno con rdkit
+RUN conda create -n rdkit_env -c rdkit -c conda-forge rdkit flask gunicorn python=3.9 -y
+
+# Activar el entorno
+SHELL ["conda", "run", "-n", "rdkit_env", "/bin/bash", "-c"]
+
+# Copiar la app
 WORKDIR /app
+COPY . .
 
-# Copia el código fuente
-COPY . /app
-
-# Instala dependencias adicionales
-RUN pip install --upgrade pip && \
-    pip install flask gunicorn
-
-# Expone el puerto que usará la app
+# Exponer puerto
 EXPOSE 8080
 
-# Comando para correr el servidor
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:8080", "app:app"]
+# Ejecutar gunicorn usando el entorno conda
+CMD ["conda", "run", "-n", "rdkit_env", "gunicorn", "-b", "0.0.0.0:8080", "app:app"]
