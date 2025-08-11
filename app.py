@@ -30,10 +30,64 @@ def validar_molecula():
     except Exception as e:
         return jsonify({"valida": False, "razon": str(e)}), 500
 
+from rdkit.Chem import AllChem, SDWriter
+import tempfile
+
 @app.route("/modificar", methods=["POST"])
 def modificar_molecula():
-    # ... tu lógica existente (no la repito por brevedad) ...
-    return jsonify({"error": "No implementado en este snippet"}), 501
+    try:
+        data = request.get_json()
+        smiles = data.get("smiles")
+        atomo_idx = int(data.get("atomo_idx"))
+        grupo = data.get("grupo")
+
+        if not smiles or grupo is None:
+            return jsonify({"error": "Datos insuficientes"}), 400
+
+        mol = Chem.MolFromSmiles(smiles)
+        mol = Chem.AddHs(mol)
+        edmol = Chem.RWMol(mol)
+
+        # Remover un hidrógeno unido al átomo objetivo
+        h_idx = None
+        for vecino in edmol.GetAtomWithIdx(atomo_idx).GetNeighbors():
+            if vecino.GetAtomicNum() == 1:
+                h_idx = vecino.GetIdx()
+                break
+
+        if h_idx is not None:
+            edmol.RemoveAtom(h_idx)
+
+        if grupo == "CH3":
+            c = Chem.Atom(6)
+            h1 = Chem.Atom(1)
+            h2 = Chem.Atom(1)
+            h3 = Chem.Atom(1)
+            c_idx = edmol.AddAtom(c)
+            edmol.AddBond(atomo_idx, c_idx, Chem.rdchem.BondType.SINGLE)
+            edmol.AddBond(c_idx, edmol.AddAtom(h1), Chem.rdchem.BondType.SINGLE)
+            edmol.AddBond(c_idx, edmol.AddAtom(h2), Chem.rdchem.BondType.SINGLE)
+            edmol.AddBond(c_idx, edmol.AddAtom(h3), Chem.rdchem.BondType.SINGLE)
+
+        mol_final = edmol.GetMol()
+        Chem.SanitizeMol(mol_final)
+        mol_final.UpdatePropertyCache(strict=False)
+        AllChem.EmbedMolecule(mol_final)
+        AllChem.UFFOptimizeMolecule(mol_final)
+
+        # Guardar en SDF temporal
+        with tempfile.NamedTemporaryFile(suffix=".sdf", delete=False) as temp:
+            writer = SDWriter(temp.name)
+            writer.write(mol_final)
+            writer.close()
+            with open(temp.name, "r") as f:
+                sdf_data = f.read()
+
+        return jsonify({"sdf": sdf_data})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 # Si ya tienes /procesar en otro archivo, OK; si no, aquí un stub compatible:
 @app.route("/procesar", methods=["POST"])
