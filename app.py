@@ -2,6 +2,10 @@ from flask import Flask, request, jsonify
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDepictor
 
+# ➕ NUEVO: resoluciones a PubChem desde el microservicio
+import requests
+import re
+
 app = Flask(__name__)
 
 @app.route("/")
@@ -169,6 +173,58 @@ def build_smiles():
         return jsonify({"smiles": smiles, "smiles_canonico": smiles_canon})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ========= NUEVO: resolver NOMBRE/CID → SMILES desde el microservicio =========
+def _pc(url, timeout=15):
+    try:
+        r = requests.get(url, timeout=timeout)
+        if r.status_code != 200:
+            return None
+        return r.json()
+    except Exception:
+        return None
+
+@app.route("/name_to_smiles", methods=["POST"])
+def name_to_smiles():
+    """
+    Input:  {"query": "benzene"}  |  {"query":"cid 5793"}  |  {"query":"c1ccccc1"}
+    Output: {"smiles": "<canonical smiles o el mismo texto si ya lo es>"}
+    """
+    data = request.get_json(silent=True) or {}
+    raw = (data.get("query") or "").strip()
+    if not raw:
+        return jsonify({"smiles": None})
+
+    # Si parece ya un SMILES (contiene símbolos típicos), devuélvelo tal cual
+    if re.search(r"[0-9=\[\]#()@+\-\\/]", raw):
+        return jsonify({"smiles": raw})
+
+    # ¿Es un CID?
+    m = re.match(r"^\s*(?:cid\s*[:#]?\s*)?(\d+)\s*$", raw, re.I)
+    if m:
+        j = _pc(f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{m.group(1)}/property/CanonicalSMILES/JSON")
+        s = (j or {}).get("PropertyTable", {}).get("Properties", [{}])[0].get("CanonicalSMILES")
+        return jsonify({"smiles": s or raw})
+
+    # Nombre → property
+    jA = _pc(f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{requests.utils.quote(raw)}/property/CanonicalSMILES/JSON")
+    sA = (jA or {}).get("PropertyTable", {}).get("Properties", [{}])[0].get("CanonicalSMILES")
+    if sA:
+        return jsonify({"smiles": sA})
+
+    # Nombre → cids → property (primer CID)
+    jC = _pc(f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{requests.utils.quote(raw)}/cids/JSON")
+    cid = (jC or {}).get("IdentifierList", {}).get("CID", [None])[0]
+    if cid:
+        jB = _pc(f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/CanonicalSMILES/JSON")
+        sB = (jB or {}).get("PropertyTable", {}).get("Properties", [{}])[0].get("CanonicalSMILES")
+        if sB:
+            return jsonify({"smiles": sB})
+
+    # Fallback: devuelve el texto original
+    return jsonify({"smiles": raw})
+
 
 if __name__ == "__main__":
     app.run(debug=True)
